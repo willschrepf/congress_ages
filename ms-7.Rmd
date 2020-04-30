@@ -1,0 +1,194 @@
+---
+title: "ms_7"
+author: "Will Schrepferman"
+date: "4/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE)
+library(tidyverse)
+library(skimr)
+library(ggplot2)
+library(broom)
+library(gt)
+```
+
+## Question 1
+
+```{r read_data}
+
+# read in the data from DW nominate's website
+
+data <- read_csv("HSall_members.csv")
+```
+
+```{r 1a}
+data_1a <- data %>%
+  
+  # filter out specifications outlined in pset
+  
+  filter((chamber == "Senate" | chamber == "House") & congress == 116 & party_code != 328) %>%
+  
+  # if_else seemed best way to create the functionally binary 'party' variable
+  
+  mutate(party = if_else(party_code == 100, "Democrat", "Republican")) %>%
+  mutate(age = 2019 - born) %>%
+  
+  # a quick google search led me to the percent_rank function
+  # I turned it into a whole number by x100, since that's what the pset had
+  
+  mutate(nominate_percentile = 100*percent_rank(nominate_dim1))
+```
+
+1A) Here is the output: 
+```{r 1a_display, include = TRUE}
+data_1a %>%
+  skim(nominate_percentile, age)
+```
+
+```{r 1b}
+age_graph <- data_1a %>%
+  ggplot(aes(x = age)) +
+  geom_histogram(binwidth = 2) +
+  labs(title = "Distribution of Ages in the 116th Congress", x = "Age", y = "Count")
+
+
+nominate_graph <- data_1a %>%
+  ggplot(aes(x = nominate_percentile)) +
+  geom_histogram(bins = 10) +
+  labs(title = "Distribution of DW Nominate Score Percentiles in the 116th Congress", x = "Percentile", y = "Count")
+```
+ 
+ 
+ 
+1B)  
+```{r 1b_display, include = TRUE}
+age_graph
+
+nominate_graph
+```
+
+
+```{r 1c}
+
+# use percentile as y, age as x
+
+coeff_1c <- lm(data_1a, formula = nominate_percentile ~ age) %>%
+  
+  # turn linear model into tidy formate
+  
+  tidy() %>%
+  
+  # get just the second row, then select and pull the 'estimate' (which is the correl. coef.)
+  
+  tail(1) %>%
+  select(estimate) %>%
+  pull()
+```
+
+1C) The correlation coeffecient between DW nominate percentile and age is `r coeff_1c`. This means that for every increase of 1 year of age, it is predicted that the percentile will decrease 0.39, as the coeffecient is negative; if it were positive, we would predict an increase in percentile of 0.39 for every increase of 1 year of age.  
+ 
+  
+  
+```{r 1d}
+plot_1d <- data_1a %>%
+  ggplot(aes(x = age, y = nominate_percentile, color = party)) +
+  
+  # flip colors so that Dems are blue and Reps are red
+  
+  scale_color_manual(values = c("blue", "red")) +
+  geom_point() + 
+  
+  # specifying color black makes the general line, the other geom_smooth applies to both parties
+  
+  geom_smooth(method = "glm", color = "black", se = FALSE) +
+  geom_smooth(method = "glm", se = FALSE) +
+  labs(title = "Relationship Between Age and DW Nominate Percentile",
+      subtitle = "Higher scores represent more conservative opinions",
+      x = "Age",
+      y = "Percentile Rank (DW Nominate)") +
+  theme_classic()
+```
+ 
+ 
+1D) 
+```{r, include = TRUE}
+plot_1d
+```
+
+The negative slope of the black best-fit line matches the negative correlation coeffecient.
+
+
+## Question 2
+
+```{r 2a}
+
+# filter out republicans for q2 data
+
+data_q2 <- data_1a %>%
+  filter(party != "Republican")
+
+display_2a <- data_q2 %>%
+  lm(formula = nominate_percentile ~ age) %>%
+  tidy(conf.int = TRUE) %>%
+  select(term, estimate, conf.low, conf.high) %>%
+  gt() %>%
+  tab_header(title = "Effect of Age on DW Nominate Percentile") %>%
+  cols_label(term = "Variable", estimate = "Estimate", conf.low = "Lower bound", conf.high = "Upper bound") %>%
+  tab_spanner(label = "Higher percentile suggests more conservative", columns = vars(term, estimate, conf.low, conf.high))
+```
+
+2A) 
+```{r, include = TRUE}
+display_2a
+```
+
+2B) 
+The estimated average treatment effect of age is a decrease of 0.33 in the percentile of a member's DW Nominate score per every year they are older. This should not be treated as causal, as other variables that are not age could play a role; for example, older Democratic Congresspeople could be concentrated in more liberal states. Calculating a confidence interval around the average treatment effect gives us an idea of the range that both the intercept and correlation coeffecient of the two variables' regression could fall into.
+
+2C)
+Under the Rubin Causal Model in this example, the potential outcomes are the DW nominate score when treated with military service and not. The coeffecient of military should be interpreted as the average treatment effect, or the average impact on DW nominate score percentile from the presence of treatment. The ATE can be used to estimate the missing outcomes in order to measure the difference in potential outcomes. The presence of randomization in assignment means this analysis could be considered causal, but we have to be wary of potential confounding variables.
+
+
+## Question 3
+
+```{r q3}
+data_q3 <- data %>%
+  filter((chamber == "Senate" | chamber == "House") & party_code == 100) %>%
+  mutate(nominate_percentile = 100*percent_rank(nominate_dim1)) %>%
+  mutate(age = (1789 + 2*congress) - born) %>%
+  group_by(congress) %>%
+  nest() %>%
+  
+  # similar to the method that worked for my group in class last week
+  
+  mutate(mod = map(data, ~ lm(data = ., formula = nominate_percentile ~ age))) %>%
+  mutate(reg_results = map(mod, ~ tidy(.))) %>%
+  mutate(coef = map_dbl(reg_results, ~  .$estimate[2])) %>%
+  mutate(se = map_dbl(reg_results, ~ .$std.error[2])) %>%
+  
+  # got 1.96*SE as formula for 95% conf. interval from textbook
+  
+  mutate(upper = coef + (1.96*se)) %>%
+  mutate(lower = coef - (1.96*se))
+
+plot_q3 <- data_q3 %>%
+  ggplot(aes(x = congress, y = coef)) +
+  geom_point(color = "blue") +
+  
+  # same as pset but had to add color
+  
+  geom_errorbar(aes(x = congress, ymin = lower, ymax = upper), color = "blue") +
+  labs(title = "Average Treatment Effect of Age On Conservatism\n Among Democrats Over Time",
+       subtitle = "Scores use DW Nominate Dimension 1\n 95% Confidence Interval",
+       x = "Congress",
+       y = "Estimate") +
+  theme_classic()
+```
+
+```{r display_q3, include = TRUE}
+plot_q3
+```
+
+
